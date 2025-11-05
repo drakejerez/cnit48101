@@ -9,7 +9,7 @@ RUN git clone https://github.com/purduecyan/docsy
 
 WORKDIR ./docsy
 RUN ["python3", "-m", "venv", ".venv"]
-RUN pip install \
+RUN /bin/bash -c "source .venv/bin/activate && pip install \
     sphinx \
     sphinx-rtd-theme \
     sphinx-copybutton \
@@ -21,8 +21,11 @@ RUN pip install \
     sphinxcontrib-httpdomain \
     sphinxcontrib-serializinghtml \
     sphinx-intl \
-    sphinx-git
+    sphinx-git"
 RUN /bin/bash -c "source .venv/bin/activate && pip install ."
+
+# Add venv bin to PATH for easier command access
+ENV PATH="/usr/src/app/docsy/.venv/bin:${PATH}"
 
 # Building the documentation
 WORKDIR ./docs
@@ -32,8 +35,8 @@ COPY ./documentation/index.rst ./source/
 COPY ./documentation/sample1.rst ./source/main
 COPY ./documentation/sample2.rst ./source/main
 
-# Build the HTML documentation after copying the new files
-RUN ["make", "html"]
+# # Build the HTML documentation after copying the new files
+# RUN ["make", "html"]
 
 # Verification
-RUN .venv/bin/sphinx-build --version
+RUN ../.venv/bin/sphinx-build --version
