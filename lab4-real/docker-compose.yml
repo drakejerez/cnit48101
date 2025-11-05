@@ -1,0 +1,41 @@
+version: '3.9'
+services:
+  builder:
+    image: docsy-builder:latest
+    volumes:
+      - site:/site
+      - ./docs/source:/work
+    environment:
+      PROJECT_NAME: "${PROJECT_NAME}"
+      SPHINX_THEME: "${SPHINX_THEME}"
+    command: sphinx-build /work /site
+    networks:
+      - docsy-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /site/index.html || exit 1"]
+      interval: 10s
+      retries: 3
+
+  web:
+    image: nginx:alpine
+    volumes:
+      - site:/usr/share/nginx/html:ro
+      - ops:/etc/nginx/conf.d
+    ports:
+      - "${DOCS_PORT}:80"
+    depends_on:
+      builder:
+        condition: service_healthy
+    networks:
+      - docsy-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 10s
+      retries: 3
+
+volumes:
+  site:
+  ops:
+
+networks:
+  docsy-net:
