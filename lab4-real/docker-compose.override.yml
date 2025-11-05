@@ -1,0 +1,9 @@
+services:
+  web:
+    ports:
+      - "8081:80"  # Overrides DOCS_PORT from .env
+    volumes:
+      - weblogs:/var/log/nginx  # Mounts log directory
+
+volumes:
+  weblogs:
