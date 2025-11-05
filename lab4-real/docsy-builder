@@ -1,0 +1,39 @@
+# FIRST CONTAINER
+# Installing python dependencies
+FROM python:3 AS base
+
+WORKDIR /usr/src/app
+
+RUN ["apt", "install", "git"]
+RUN git clone https://github.com/purduecyan/docsy
+
+WORKDIR ./docsy
+RUN ["python3", "-m", "venv", ".venv"]
+RUN pip install \
+    sphinx \
+    sphinx-rtd-theme \
+    sphinx-copybutton \
+    sphinx-prompt \
+    myst-parser \
+    sphinx-autobuild \
+    sphinx-design \
+    sphinxcontrib-mermaid \
+    sphinxcontrib-httpdomain \
+    sphinxcontrib-serializinghtml \
+    sphinx-intl \
+    sphinx-git
+RUN /bin/bash -c "source .venv/bin/activate && pip install ."
+
+# Building the documentation
+WORKDIR ./docs
+
+# Copy the new documentation files before building
+COPY ./documentation/index.rst ./source/
+COPY ./documentation/sample1.rst ./source/main
+COPY ./documentation/sample2.rst ./source/main
+
+# Build the HTML documentation after copying the new files
+RUN ["make", "html"]
+
+# Verification
+RUN .venv/bin/sphinx-build --version
