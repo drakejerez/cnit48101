@@ -32,6 +32,7 @@ services:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
       interval: 10s
       retries: 3
+      
   dev:
     image: docsy-builder:latest
     working_dir: /work
@@ -48,6 +49,32 @@ services:
       - "8000:8000"
     networks:
       - docsy-net
+    dozzle:
+    image: amir20/dozzle:v7
+    profiles: ["obs"]
+    ports:
+      - "9000:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      web:
+        condition: service_started
+    networks:
+      - docsy-net
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: ["obs"]
+    ports:
+      - "9100:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - docsy-net
+      
 volumes:
   site:
   ops:
