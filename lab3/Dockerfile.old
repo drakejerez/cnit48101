@@ -1,0 +1,37 @@
+# DEPENDENCIES
+FROM python:3
+
+WORKDIR /usr/src/app
+COPY . .
+
+WORKDIR ./docsy
+RUN ["python3", "-m", "venv", ".venv"]
+RUN pip install \
+    sphinx \
+    sphinx-rtd-theme \
+    sphinx-copybutton \
+    sphinx-prompt \
+    myst-parser \
+    sphinx-autobuild \
+    sphinx-design \
+    sphinxcontrib-mermaid \
+    sphinxcontrib-httpdomain \
+    sphinxcontrib-serializinghtml \
+    sphinx-intl \
+    sphinx-git
+RUN /bin/bash -c "source .venv/bin/activate && pip install ."
+
+# BUILD
+WORKDIR ./docs
+RUN ["make", "html"]
+
+# SERVE HTML
+EXPOSE 8000
+CMD ["python", "-m", "http.server", "--directory", "build/html", "8000"]
+
+#1 container dependencies
+#1 container build
+#1 container documentations
+#1 container serve html
+#secured = non root user
+# host code, be at the top of the stack! If something chnages you're rebuildnig too much.

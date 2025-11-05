@@ -1,0 +1,1 @@
+{"disk":[],"floppy":[],"dvd":[{"name":"vagrant-cloud_init-disk","port":"1","device":"0","uuid":"53538b34-6f05-48ee-bc16-1534ac1dcfee","controller":"VirtIO Controller"}]}
