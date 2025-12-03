@@ -1,0 +1,254 @@
+#cloud-config
+write_files:
+  - path: /opt/bootstrap_worker.sh
+    permissions: '0755'
+    owner: root:root
+    content: | 
+      #!/usr/bin/env bash
+      # Kubernetes Worker Join Script (Debian-based only)
+      # Features: Dry-Run, Verbosity, Error Handling, Task Listing, Selective Execution
+      # Supports local join script or optional fetch from master via scp/sshpass.
+
+      # ==========================
+      # DEFAULT CONFIG
+      # ==========================
+      JOIN_SCRIPT_PATH="/srv/join/joincluster.sh"  # --join-script / -J
+      FETCH_FROM_MASTER=false                      # --fetch / -f (fetch join script via scp)
+      MASTER_HOST="master.example.com"             # --master-host / -m
+      MASTER_USER="root"                           # --master-user / -u
+      MASTER_JOIN_PATH="/joincluster.sh"           # --master-path / -M
+      SSH_USE_PASSWORD=false                       # --ssh-pass / -P (use sshpass; otherwise key/agent)
+      SSH_PASSWORD="kubeadmin"                     # --password / -p
+      SSH_KEY_PATH=""                              # --ssh-key / -K (optional: path to private key)
+
+      DRY_RUN=false
+      VERBOSE=false
+      ONLY=""
+      SKIP=""
+      LIST_TASKS=false
+
+      # ==========================
+      # CLI HELP
+      # ==========================
+      print_usage() {
+        cat <<'EOF'
+      bootstrap_worker.sh — Join a worker node to Kubernetes (Debian-based only)
+
+      USAGE:
+        sudo ./bootstrap_worker.sh [options]
+
+      OPTIONS:
+        --dry-run, -d                 Preview commands without executing them
+        --verbose, -v                 Print commands for each task
+        --join-script, -J <path>      Local join script path (default: /srv/join/joincluster.sh)
+        --fetch, -f                   Fetch join script from master via scp before joining
+        --master-host, -m <host>      Master hostname/IP (default: master.example.com)
+        --master-user, -u <user>      SSH user on master (default: root)
+        --master-path, -M <path>      Path to join script on master (default: /joincluster.sh)
+        --ssh-pass, -P                Use password auth with sshpass (default: key/agent)
+        --password, -p <pass>         SSH password (default: kubeadmin)
+        --ssh-key, -K <path>          SSH private key path (optional; otherwise use default key/agent)
+        --only, -o "1,2"              Run only specified task numbers
+        --skip, -s "3"                Skip specified task numbers
+        --list-tasks, -t              List all tasks and exit
+        --help, -h                    Show this help
+
+      EXAMPLES:
+        # Join using local script
+        sudo ./bootstrap_worker.sh
+
+        # Fetch join script from master with password auth
+        sudo ./bootstrap_worker.sh -f -P -m master.example.com -u root -p kubeadmin -M /joincluster.sh
+
+        # Fetch join script using SSH key
+        sudo ./bootstrap_worker.sh -f -m master.example.com -u root -K /home/vagrant/.ssh/id_rsa
+
+        # Dry-run verbose
+        sudo ./bootstrap_worker.sh -d -v
+
+        # Run only fetch task
+        sudo ./bootstrap_worker.sh -o "1"
+      EOF
+      }
+
+      # ==========================
+      # CLI ARGUMENTS
+      # ==========================
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --dry-run|-d) DRY_RUN=true ;;
+          --verbose|-v) VERBOSE=true ;;
+          --join-script|-J) JOIN_SCRIPT_PATH="$2"; shift ;;
+          --fetch|-f) FETCH_FROM_MASTER=true ;;
+          --master-host|-m) MASTER_HOST="$2"; shift ;;
+          --master-user|-u) MASTER_USER="$2"; shift ;;
+          --master-path|-M) MASTER_JOIN_PATH="$2"; shift ;;
+          --ssh-pass|-P) SSH_USE_PASSWORD=true ;;
+          --password|-p) SSH_PASSWORD="$2"; shift ;;
+          --ssh-key|-K) SSH_KEY_PATH="$2"; shift ;;
+          --only|-o) ONLY="$2"; shift ;;
+          --skip|-s) SKIP="$2"; shift ;;
+          --list-tasks|-t) LIST_TASKS=true ;;
+          --help|-h) print_usage; exit 0 ;;
+          *) echo "Unknown option: $1"; print_usage; exit 1 ;;
+        esac
+        shift
+      done
+
+      # ==========================
+      # SAFETY & ENVIRONMENT CHECKS
+      # ==========================
+      # Avoid -u to prevent 'unbound variable' issues in Vagrant/non-interactive shells.
+      set -eo pipefail
+      trap 'echo "[ERROR] Script failed at task $TASK_NUM." >&2' ERR
+
+      if [[ "$EUID" -ne 0 ]]; then
+        echo "[ERROR] Please run as root (use sudo)."
+        exit 1
+      fi
+
+      OS_ID="$(awk -F= '/^ID=/{print $2}' /etc/os-release | tr -d '"')"
+      if [[ "$OS_ID" != "debian" && "$OS_ID" != "ubuntu" ]]; then
+        echo "[ERROR] This script supports Debian-based OS only. Detected: $OS_ID"
+        exit 1
+      fi
+
+      if ! command -v apt-get &>/dev/null; then
+        echo "[ERROR] apt-get not found. This script requires apt package manager."
+        exit 1
+      fi
+
+      # Tools needed depending on flow
+      REQUIRED_TOOLS=(bash)
+      if $FETCH_FROM_MASTER; then
+        REQUIRED_TOOLS+=(scp)
+        if $SSH_USE_PASSWORD; then
+          REQUIRED_TOOLS+=(sshpass)
+        fi
+      fi
+      for tool in "${REQUIRED_TOOLS[@]}"; do
+        if ! command -v "$tool" &>/dev/null; then
+          echo "[ERROR] Required tool '$tool' is missing."
+          if [[ "$tool" == "sshpass" ]]; then
+            echo "        Install: apt-get update && apt-get install -y sshpass"
+          fi
+          exit 1
+        fi
+      done
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      # ==========================
+      # TASK CONTROL HELPERS
+      # ==========================
+      TASK_NUM=0
+      TASK_LIST=()
+
+      contains_number() {
+        local list="$1" num="$2"
+        [[ -z "$list" ]] && return 1
+        IFS=',' read -r -a arr <<< "$list"
+        for x in "${arr[@]}"; do
+          [[ "$x" =~ ^[0-9]+$ ]] && [[ "$x" -eq "$num" ]] && return 0
+        done
+        return 1
+      }
+      should_run() {
+        local num="$1"
+        if [[ -n "$ONLY" ]]; then
+          contains_number "$ONLY" "$num" || return 1
+        fi
+        if contains_number "$SKIP" "$num"; then
+          return 1
+        fi
+        return 0
+      }
+
+      TASK() {
+        TASK_NUM=$((TASK_NUM + 1))
+        local desc="$1"
+        TASK_LIST+=("### \u2638\uFE0F  \033[1m[TASK $TASK_NUM]\033[0m $desc")
+        local cmd; cmd="$(cat)"
+
+        if $LIST_TASKS; then return; fi
+
+        if ! should_run "$TASK_NUM"; then
+          echo -e "### \u2638\uFE0F  \033[1m[TASK $TASK_NUM]\033[0m $desc (skipped)"
+          return
+        fi
+        echo -e "### \u2638\uFE0F  \033[1m[TASK $TASK_NUM]\033[0m $desc"
+        if $DRY_RUN; then
+          if $VERBOSE; then
+            echo "$cmd"
+            echo
+          else
+            echo -e "### \u2638\uFE0F  \033[1m[DRY-RUN]\033[0m (commands suppressed; use -v to show)"
+            echo
+          fi
+        else
+          if $VERBOSE; then
+            echo "$cmd"
+            echo
+          fi
+          bash -euo pipefail -c "$cmd"
+        fi
+      }
+
+      # ==========================
+      # TASKS
+      # ==========================
+
+      TASK "Optionally fetch join script from master via scp" <<CMD
+      if $FETCH_FROM_MASTER; then
+        # Build SCP command based on auth method
+        if $SSH_USE_PASSWORD; then
+          # Password auth via sshpass
+          sshpass -p "$SSH_PASSWORD" scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+            "$MASTER_USER@$MASTER_HOST:$MASTER_JOIN_PATH" "$JOIN_SCRIPT_PATH"
+        else
+          # Key/agent auth
+          if [[ -n "$SSH_KEY_PATH" ]]; then
+            scp -i "$SSH_KEY_PATH" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+              "$MASTER_USER@$MASTER_HOST:$MASTER_JOIN_PATH" "$JOIN_SCRIPT_PATH"
+          else
+            scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+              "$MASTER_USER@$MASTER_HOST:$MASTER_JOIN_PATH" "$JOIN_SCRIPT_PATH"
+          fi
+        fi
+        chmod +x "$JOIN_SCRIPT_PATH"
+        echo "[INFO] Fetched join script to $JOIN_SCRIPT_PATH"
+      else
+        echo "[INFO] Skipping fetch (using local join script at $JOIN_SCRIPT_PATH)"
+      fi
+      CMD
+
+      TASK "Join node to Kubernetes cluster" <<CMD
+      if [[ ! -x "$JOIN_SCRIPT_PATH" ]]; then
+        if [[ -f "$JOIN_SCRIPT_PATH" ]]; then
+          chmod +x "$JOIN_SCRIPT_PATH"
+        else
+          echo "[ERROR] Join script not found at $JOIN_SCRIPT_PATH"
+          exit 1
+        fi
+      fi
+      bash "$JOIN_SCRIPT_PATH" &>/dev/null
+      CMD
+
+      # ==========================
+      # LIST TASKS MODE
+      # ==========================
+      if $LIST_TASKS; then
+        echo "Available tasks:"
+        for t in "${TASK_LIST[@]}"; do
+          echo "  $t"
+        done
+        exit 0
+      fi
+
+      echo -e "### \u2705 \033[1m[FINAL]\033[0m Worker node join completed."
+
+#runcmd:
+#  - echo "Beginning bootstrap script"
+#  - /opt/bootstrap.sh
+#  - '/opt/bootstrap_worker.sh'
+#  - /opt/bootstrap_metallb.sh
