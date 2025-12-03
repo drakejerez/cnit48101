@@ -1,0 +1,182 @@
+#cloud-config
+autoinstall:
+  version: 1
+  early-commands:
+    - systemctl stop ssh
+
+  network:
+    network:
+      version: 2
+      ethernets:
+        en0:
+          match:
+            name: e*
+          dhcp4: false
+          dhcp6: false
+          addresses:
+            - 192.168.24.10/24            # MASTER IP
+          routes:
+            - to: default
+              via: 192.168.24.1           # GATEWAY
+          nameservers:
+            search: [example.local]
+            addresses: [192.168.24.2,8.8.8.8,8.8.4.4]
+          renderer: networkd
+
+  identity:
+    hostname: k8s-master1
+    username: ubuntu
+    # generate a secure password hash with: mkpasswd --method=sha-512
+    password: '$6$REPLACE_ME$HASHGOESHERE....'
+
+  packages:
+    - apt-transport-https
+    - ca-certificates
+    - curl
+    - gpg
+    - software-properties-common
+    - git
+    - openssh-server
+    - nfs-common
+
+  user-data:
+    disable_root: false
+
+    write_files:
+      - path: /etc/modules-load.d/containerd.conf
+        content: |
+          overlay
+          br_netfilter
+        permissions: '0644'
+        owner: root:root
+
+      - path: /etc/sysctl.d/kubernetes.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+        permissions: '0644'
+        owner: root:root
+
+      - path: /home/ubuntu/metallb-addresspool.yaml
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: default-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+              - 192.168.24.200-192.168.24.250  # STATIC RANGE within your /24
+        permissions: '0644'
+        owner: ubuntu:ubuntu
+
+      - path: /home/ubuntu/metallb-l2advertisement.yaml
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: default-advert
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - default-pool
+        permissions: '0644'
+        owner: ubuntu:ubuntu
+
+      - path: /home/ubuntu/utils/cluster-post.sh
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          echo "Setting kubectl bash completion..."
+          echo "source <(kubectl completion bash)" >> /home/ubuntu/.bashrc
+
+          echo "Create join token script..."
+          kubeadm token create --print-join-command > /home/ubuntu/join.sh
+          chmod +x /home/ubuntu/join.sh
+
+          echo "Label and taint adjustments..."
+          kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+          echo "Verify default storage class..."
+          kubectl get storageclass
+
+          echo "Done."
+        permissions: '0755'
+        owner: ubuntu:ubuntu
+
+    runcmd:
+      # Base preparation
+      - 'sudo apt-get update'
+      - sed -i '/swap/d' /etc/fstab
+      - swapoff -a
+      - 'systemctl disable --now ufw >/dev/null 2>&1'
+      - 'modprobe overlay'
+      - 'modprobe br_netfilter'
+      - 'sudo install -m 0755 -d /etc/apt/keyrings'
+
+      # Docker (containerd) repo and install
+      - 'sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc'
+      - 'sudo chmod a+r /etc/apt/keyrings/docker.asc'
+      - 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null'
+      - 'sudo apt-get update'
+      - 'sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
+      - 'containerd config default | sudo tee /etc/containerd/config.toml >/dev/null'
+      - sudo sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+      - 'sudo systemctl restart containerd'
+      - 'sudo systemctl enable containerd >/dev/null'
+      - 'groupadd -f docker'
+      - 'usermod -aG docker ubuntu'
+      - 'systemctl enable docker'
+      - 'systemctl daemon-reload'
+      - 'sudo systemctl restart docker'
+
+      # Kubernetes apt repo and install
+      - 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list'
+      - 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+      - 'sudo apt-get update'
+      - 'sudo apt-get install -y kubelet kubeadm kubectl'
+      - 'sudo apt-mark hold kubelet kubeadm kubectl'
+      - 'sudo systemctl enable --now kubelet'
+
+      # Initialize control plane
+      - 'MASTER_IP=$(hostname -I | awk "{print $1}")'
+      - 'echo "Initializing Kubernetes control plane on ${MASTER_IP}..."'
+      - 'sudo kubeadm init --apiserver-advertise-address=${MASTER_IP} --pod-network-cidr=192.168.0.0/16 >> /root/kubeinit.log 2>&1'
+
+      # Kubeconfig for ubuntu
+      - 'sudo mkdir -p /home/ubuntu/.kube'
+      - 'sudo cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config'
+      - 'sudo chown -R ubuntu:ubuntu /home/ubuntu/'
+
+      # Calico CNI
+      - 'echo "Installing Calico CNI..."'
+      - 'kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml'
+
+      # MetalLB
+      - 'echo "Installing MetalLB..."'
+      - 'kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: true/" | kubectl apply -f - -n kube-system'
+      - 'kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml'
+      - 'kubectl apply -f /home/ubuntu/metallb-addresspool.yaml'
+      - 'kubectl apply -f /home/ubuntu/metallb-l2advertisement.yaml'
+
+      # OpenEBS (default storage class)
+      - 'echo "Installing OpenEBS..."'
+      - 'kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml'
+      # Set default storage class to openebs-hostpath (works for single-node and small clusters)
+      - 'kubectl patch storageclass openebs-hostpath -p "{\"metadata\": {\"annotations\": {\"storageclass.kubernetes.io/is-default-class\": \"true\"}}}" || true'
+
+      # Cluster post steps
+      - '/home/ubuntu/utils/cluster-post.sh'
+
+      # Keep SSH reachable
+      - 'sudo systemctl enable ssh'
+      - 'sudo systemctl start ssh'
+
+  late-commands:
+    - sudo netplan --debug generate
+    - sudo netplan --debug apply
+    - sudo systemctl restart systemd-networkd
+    - echo "ubuntu ALL=(ALL) NOPASSWD:ALL" > /target/etc/sudoers.d/ubuntu
+    - apt-get -y update

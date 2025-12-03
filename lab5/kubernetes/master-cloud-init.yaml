@@ -1,0 +1,266 @@
+#cloud-config
+users:
+  - name: ubuntu
+    groups: sudo, docker
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - git
+  - openssh-server
+  - nfs-common
+
+write_files:
+  - path: /etc/modules-load.d/containerd.conf
+    content: |
+      overlay
+      br_netfilter
+    permissions: '0644'
+    owner: root:root
+
+  - path: /etc/sysctl.d/kubernetes.conf
+    content: |
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.ipv4.ip_forward = 1
+    permissions: '0644'
+    owner: root:root
+
+  - path: /home/ubuntu/metallb-addresspool.yaml
+    content: |
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: default-pool
+        namespace: metallb-system
+      spec:
+        addresses:
+          - 172.16.16.200-172.16.16.250
+    permissions: '0644'
+    owner: ubuntu:ubuntu
+
+  - path: /home/ubuntu/metallb-l2advertisement.yaml
+    content: |
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: default-advert
+        namespace: metallb-system
+      spec:
+        ipAddressPools:
+          - default-pool
+    permissions: '0644'
+    owner: ubuntu:ubuntu
+
+  - path: /home/ubuntu/setup-cluster.sh
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "[TASK] Waiting for kubeadm to be ready..."
+      while [ ! -f /etc/kubernetes/admin.conf ]; do
+        sleep 5
+      done
+
+      echo "[TASK] Copy kubeconfig to ubuntu user"
+      mkdir -p /home/ubuntu/.kube
+      cp /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+      chown -R ubuntu:ubuntu /home/ubuntu/.kube
+
+      echo "[TASK] Install Calico CNI"
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/tigera-operator.yaml
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/custom-resources.yaml
+
+      echo "[TASK] Wait for Calico to be ready"
+      sleep 60
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=600s || true
+
+      echo "[TASK] Install MetalLB"
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: true/" | kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f - -n kube-system
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
+      
+      echo "[TASK] Wait for MetalLB to be ready"
+      sleep 60
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=ready pod -l app=metallb -n metallb-system --timeout=600s || true
+      
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /home/ubuntu/metallb-addresspool.yaml
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /home/ubuntu/metallb-l2advertisement.yaml
+
+      echo "[TASK] Install OpenEBS"
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://openebs.github.io/charts/openebs-operator.yaml
+      
+      echo "[TASK] Wait for OpenEBS to be ready"
+      sleep 60
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf wait --for=condition=ready pod -l name=openebs -n openebs --timeout=600s || true
+      
+      echo "[TASK] Wait for storage classes to be created"
+      sleep 30
+      
+      echo "[TASK] Set OpenEBS as default storage class"
+      # Remove default annotation from any existing default storage class
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf get storageclass -o jsonpath='{.items[*].metadata.name}' | xargs -n1 -I {} kubectl --kubeconfig=/etc/kubernetes/admin.conf patch storageclass {} -p '{"metadata": {"annotations": {"storageclass.kubernetes.io/is-default-class": "false"}}}' || true
+      # Set openebs-hostpath as default
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf patch storageclass openebs-hostpath -p '{"metadata": {"annotations": {"storageclass.kubernetes.io/is-default-class": "true"}}}' || true
+
+      echo "[TASK] Remove taint from master node"
+      kubectl --kubeconfig=/etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+      echo "[TASK] Generate join command"
+      mkdir -p /srv/join
+      kubeadm token create --print-join-command > /srv/join/joincluster.sh
+      chmod +x /srv/join/joincluster.sh
+
+      echo "[TASK] Setup kubectl completion"
+      echo "source <(kubectl completion bash)" >> /home/ubuntu/.bashrc
+
+      echo "[TASK] Cluster setup complete!"
+    permissions: '0755'
+    owner: root:root
+
+  - path: /home/ubuntu/deploy-tutorial.sh
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "Deploying Kubernetes Tutorial Application"
+      echo "=========================================="
+
+      # Set kubectl context (should already be set from cloud-init)
+      export KUBECONFIG=/home/ubuntu/.kube/config
+
+      # Wait for cluster to be ready
+      echo "[STEP 1] Waiting for cluster to be ready..."
+      kubectl wait --for=condition=ready node --all --timeout=300s
+
+      # Create a Deployment (from Kubernetes basics tutorial)
+      echo "[STEP 2] Creating Deployment..."
+      kubectl create deployment kubernetes-bootcamp --image=gcr.io/google-samples/kubernetes-bootcamp:v1
+
+      # Wait for deployment to be ready
+      echo "[STEP 3] Waiting for Deployment to be ready..."
+      kubectl wait --for=condition=available deployment/kubernetes-bootcamp --timeout=300s
+
+      # Expose the Deployment as a Service
+      echo "[STEP 4] Exposing Deployment as a Service..."
+      kubectl expose deployment/kubernetes-bootcamp --type="LoadBalancer" --port 8080
+
+      # Wait for service to get an external IP (from MetalLB)
+      echo "[STEP 5] Waiting for Service to get external IP..."
+      sleep 30
+
+      # Scale the deployment (part of the tutorial)
+      echo "[STEP 6] Scaling Deployment to 3 replicas..."
+      kubectl scale deployment/kubernetes-bootcamp --replicas=3
+
+      # Wait for pods to be ready
+      echo "[STEP 7] Waiting for Pods to be ready..."
+      kubectl wait --for=condition=ready pod -l app=kubernetes-bootcamp --timeout=300s
+
+      # Get Pod name
+      POD_NAME=$(kubectl get pods -l app=kubernetes-bootcamp -o jsonpath='{.items[0].metadata.name}')
+
+      echo ""
+      echo "=========================================="
+      echo "Dumping YAML files"
+      echo "=========================================="
+
+      # Dump Pod YAML
+      echo "[OUTPUT] Pod YAML:"
+      echo "---"
+      kubectl get pod $POD_NAME -o yaml
+
+      echo ""
+      echo "=========================================="
+
+      # Dump Deployment YAML
+      echo "[OUTPUT] Deployment YAML:"
+      echo "---"
+      kubectl get deployment kubernetes-bootcamp -o yaml
+
+      echo ""
+      echo "=========================================="
+
+      # Dump Service YAML
+      echo "[OUTPUT] Service YAML:"
+      echo "---"
+      kubectl get service kubernetes-bootcamp -o yaml
+
+      echo ""
+      echo "=========================================="
+      echo "Tutorial deployment complete!"
+      echo "=========================================="
+
+      # Show status
+      echo ""
+      echo "Current status:"
+      kubectl get all -l app=kubernetes-bootcamp
+    permissions: '0755'
+    owner: ubuntu:ubuntu
+
+  - path: /home/ubuntu/setup-master.sh
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      echo "[TASK 1] Disable and turn off SWAP"
+      sed -i '/swap/d' /etc/fstab
+      swapoff -a
+
+      echo "[TASK 2] Stop and Disable firewall"
+      systemctl disable --now ufw >/dev/null 2>&1
+
+      echo "[TASK 3] Enable and Load Kernel modules"
+      modprobe overlay
+      modprobe br_netfilter
+      sysctl --system >/dev/null 2>&1
+
+      echo "[TASK 4] Install containerd runtime"
+      mkdir -p /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+        $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+      apt-get update -qq >/dev/null
+      apt-get install -qq -y containerd.io >/dev/null
+      containerd config default > /etc/containerd/config.toml
+      sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+      systemctl restart containerd
+      systemctl enable containerd >/dev/null
+
+      echo "[TASK 5] Set up kubernetes repo"
+      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+
+      echo "[TASK 6] Install Kubernetes components"
+      apt-get update -qq >/dev/null
+      apt-get install -qq -y kubeadm kubelet kubectl >/dev/null
+      apt-mark hold kubelet kubeadm kubectl
+      systemctl enable --now kubelet
+
+      echo "[TASK 7] Pull required containers"
+      kubeadm config images pull >/dev/null 2>&1
+
+      echo "[TASK 8] Initialize Kubernetes Cluster"
+      kubeadm init --apiserver-advertise-address=172.16.16.100 --pod-network-cidr=192.168.0.0/16 >> /root/kubeinit.log 2>&1
+
+      echo "[TASK 9] Run cluster post-setup"
+      /home/ubuntu/setup-cluster.sh
+    permissions: '0755'
+    owner: root:root
+
+runcmd:
+  - 'echo "172.16.16.100   master.example.com     master" >> /etc/hosts'
+  - 'echo "172.16.16.101   worker1.example.com    worker1" >> /etc/hosts'
+  - 'echo "172.16.16.102   worker2.example.com    worker2" >> /etc/hosts'
+  - '/home/ubuntu/setup-master.sh'
+

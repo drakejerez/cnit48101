@@ -1,0 +1,1 @@
+{"virtualbox":{"/srv/join":{"guestpath":"/srv/join","hostpath":"/home/CIT/reeves51/vagrant/kubernetes/src","disabled":false,"__vagrantfile":true},"/vagrant":{"guestpath":"/vagrant","hostpath":"/home/CIT/reeves51/vagrant/kubernetes","disabled":false,"__vagrantfile":true}}}

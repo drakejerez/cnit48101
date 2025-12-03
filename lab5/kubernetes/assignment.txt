@@ -1,0 +1,12 @@
+
+    Automate the installation of a 3-node Kubernetes cluster with a single master node and two worker nodes using cloud-init. Installation instructions are available at https://kubernetes.io/docs/setup/
+        Use the Ubuntu 24.04 Server on each node.
+        Use Cloud-init to provision each node.
+        You will create separate Cloud-init configurations for the master and the worker nodes.
+        You may use the VM K8s cluster setup instructions available at https://github.com/purduecyan/cloud-init/tree/main/k8s/master to guide your Cloud-init configurations.
+    Install a Container Network Interface (CNI) to ensure that pods can communicate with each other. You will deploy Calico CNI using the instructions provided in the 'Useful Links' section above.
+    Install an automatic storage provisioner. You may use either OpenEBS (recommended) or the NFS storage provisioner. In either case, ensure that the corresponding storage class is set as the default storage provisioner.
+    Install Metallb and allocate a static pool from your assigned /24 IP address space.
+    The Cloud-init configurations must include everything, including initializing the control plane using kubeadm on the master and the command for joining the workers to the cluster, as well as Calico, Metallb, and the storage provisioner setups.
+    Complete the tutorial at https://kubernetes.io/docs/tutorials/kubernetes-basics/ to deploy the tutorial app on your cluster (NOT the tutorial's interactive web-based setup).
+    Use the kubectl get <stuff> command to dump the YAML files for your Pod, Deployment, and Service.
