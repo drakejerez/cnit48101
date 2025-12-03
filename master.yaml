@@ -465,20 +465,14 @@ write_files:
       CMD
 
       TASK "Copy kube admin config to USER_HOME ($USER_HOME)" <<CMD
-      mkdir -p $USER_HOME/.kube
-      sudo cp -i /etc/kubernetes/admin.conf "$USER_HOME/.kube/config"
-      sudo chown $USER:$USER "$USER_HOME/.kube"
+      chown -R vagrant:vagrant "/etc/kubernetes"
+      KUBECONFIG="/etc/kubernetes/admin.conf"
       CMD
 
       TASK "Deploy Calico CNI via Tigera Operator ($CALICO_VERSION, $CALICO_DATAPLANE)" <<CMD
-      kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/operator-crds.yaml" &>/dev/null
-      kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/tigera-operator.yaml" &>/dev/null
-
-      if [[ "$CALICO_DATAPLANE" == "bpf" ]]; then
-        kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/custom-resources-bpf.yaml &>/dev/null
-      else # "$CALICO_DATAPLANE" == "iptables" -- Default
-        kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/custom-resources.yaml &>/dev/null
-      fi
+      KUBECONFIG="/etc/kubernetes/admin.conf" kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/operator-crds.yaml" 
+      KUBECONFIG="/etc/kubernetes/admin.conf" kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/tigera-operator.yaml" 
+      KUBECONFIG="/etc/kubernetes/admin.conf" kubectl create -f "https://raw.githubusercontent.com/projectcalico/calico/$CALICO_VERSION/manifests/custom-resources.yaml" 
       CMD
 
       TASK "Generate and save cluster join command" <<CMD
@@ -674,6 +668,7 @@ write_files:
       CMD
 
       TASK "Wait for pods to be Ready" <<CMD
+      sleep 60
       kubectl wait pod --all --for=condition=Ready --namespace=kube-system --timeout=240s
       kubectl wait pod --all --for=condition=Ready --namespace=calico-system --timeout=240s
       kubectl wait pod --all --for=condition=Ready --namespace=metallb-system --timeout=240s
@@ -712,7 +707,5 @@ write_files:
       echo -e "### \u2705 \033[1m[FINAL]\033[0m MetalLB installation completed."
 
 runcmd:
-  - echo "Beginning bootstrap script"
-  - /bin/bash "/opt/bootstrap.sh"
-  - /bin/bash "/opt/bootstrap_master.sh"
-  - /bin/bash '/opt/bootstrap_metallb.sh'
+  - apt install net-tools
+  - ifconfig
