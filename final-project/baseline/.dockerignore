@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+data/
+*.db
+*.sqlite
+.git/
+.gitignore
+*.md
+*.pdf
+test_services.py
+k8s/
+.dockerignore
+

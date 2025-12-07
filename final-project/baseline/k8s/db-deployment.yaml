@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-service
+  namespace: microservices
+  labels:
+    app: db-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-service
+  template:
+    metadata:
+      labels:
+        app: db-service
+    spec:
+      containers:
+      - name: db-service
+        image: db-service:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8082
+        env:
+        - name: DB_PATH
+          value: "/data/app.db"
+        - name: ARTIFICIAL_LATENCY_MS
+          value: "100"
+        volumeMounts:
+        - name: db-storage
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: db-storage
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-service
+  namespace: microservices
+  labels:
+    app: db-service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8082
+    targetPort: 8082
+    protocol: TCP
+  selector:
+    app: db-service
+

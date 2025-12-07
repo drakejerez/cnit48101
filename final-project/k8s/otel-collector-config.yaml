@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: microservices
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+      memory_limiter:
+        limit_mib: 512
+        spike_limit_mib: 128
+        check_interval: 5s
+    
+    exporters:
+      zipkin:
+        endpoint: http://jaeger-collector:9411/api/v2/spans
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [zipkin]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus]
+

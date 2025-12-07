@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: microservices
+  labels:
+    app: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+      - name: auth-service
+        image: auth-service:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8081
+        env:
+        - name: JWT_SECRET
+          value: "your-secret-key-change-in-production"
+        - name: DB_SERVICE_URL
+          value: "http://db-service:8082"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://localhost:4317"
+        - name: SERVICE_NAME
+          value: "auth-service"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.91.0
+        command:
+          - "/otelcol-contrib"
+          - "--config=/etc/otel-collector-config.yaml"
+        volumeMounts:
+        - name: otel-collector-config
+          mountPath: /etc/otel-collector-config.yaml
+          subPath: otel-collector-config.yaml
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+        - containerPort: 4318
+          name: otlp-http
+        - containerPort: 8889
+          name: prometheus
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: otel-collector-config
+        configMap:
+          name: otel-collector-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: microservices
+  labels:
+    app: auth-service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+  selector:
+    app: auth-service
+

@@ -3,7 +3,7 @@
 
 ENV['VAGRANT_NO_PARALLEL'] = 'yes'
 
-VAGRANT_BOX         = "ubuntu/noble64"
+VAGRANT_BOX         = "ubuntu/jammy64"
 VAGRANT_BOX_VERSION = ">= 20240415.0.0"
 CPUS_MASTER_NODE    = 2
 CPUS_WORKER_NODE    = 2
@@ -40,8 +40,17 @@ Vagrant.configure(2) do |config|
 
     node.vm.provision "file", source: "master-cloud-init.yaml", destination: "/tmp/user-data"
     node.vm.provision "shell", inline: <<-SHELL
+      # Clean cloud-init state to force re-run
+      sudo rm -rf /var/lib/cloud/instance
+      sudo rm -f /var/lib/cloud/data/instance-id
+      sudo rm -f /var/lib/cloud/seed/nocloud/user-data
+      
+      # Copy cloud-init config
       sudo mkdir -p /var/lib/cloud/seed/nocloud
       sudo cp /tmp/user-data /var/lib/cloud/seed/nocloud/user-data
+      
+      # Run cloud-init
+      sudo cloud-init clean
       sudo cloud-init init --local
       sudo cloud-init init
       sudo cloud-init modules --mode config
@@ -77,8 +86,17 @@ Vagrant.configure(2) do |config|
 
       node.vm.provision "file", source: "worker-cloud-init.yaml", destination: "/tmp/user-data"
       node.vm.provision "shell", inline: <<-SHELL
+        # Clean cloud-init state to force re-run
+        sudo rm -rf /var/lib/cloud/instance
+        sudo rm -f /var/lib/cloud/data/instance-id
+        sudo rm -f /var/lib/cloud/seed/nocloud/user-data
+        
+        # Copy cloud-init config
         sudo mkdir -p /var/lib/cloud/seed/nocloud
         sudo cp /tmp/user-data /var/lib/cloud/seed/nocloud/user-data
+        
+        # Run cloud-init
+        sudo cloud-init clean
         sudo cloud-init init --local
         sudo cloud-init init
         sudo cloud-init modules --mode config

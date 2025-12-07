@@ -1,0 +1,18 @@
+1. Create Application service (Python 3.11 + FastAPI, port 8080, HTTP/gRPC endpoints, orchestrates Auth and DB calls)
+2. Create Auth service (Python + PyJWT, stateless token generation/validation)
+3. Create DB service (Python + SQLite, with artificial latency injection)
+4. Add OpenTelemetry SDK instrumentation to all three services (traces and metrics)
+5. Implement trace context propagation between services (App -> Auth -> DB)
+6. Create Dockerfiles for each service
+7. Create Kubernetes manifests (Deployments, Services) for all services
+8. Deploy OpenTelemetry Collector as sidecar in each pod (OTLP receiver, batch processor)
+9. Configure Collector to export traces to Jaeger
+10. Configure Collector to export metrics to Prometheus
+11. Deploy Jaeger for trace visualization
+12. Deploy Prometheus for metrics collection
+13. Create traffic generator script (simulate high-volume requests with spikes/errors)
+14. Test baseline uninstrumented deployment (measure latency/throughput/resource usage)
+15. Test fully instrumented deployment (verify telemetry volume matches traffic, trace completeness, system health)
+16. Compare baseline vs instrumented performance overhead
+
+
