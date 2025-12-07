@@ -29,13 +29,12 @@ OPENEBS_ENGINE = ENV['OPENEBS_ENGINE'] # # optional; may be empty
 Vagrant.configure(2) do |config|
 
   config.vm.synced_folder "src/", "/srv/join"
-  config.vm.cloud_init :user_data do |cloud_init|
-    cloud_init.content_type = "text/cloud-config"
-    cloud_init.path = "master.yaml"
-  end
+  
   # Kubernetes Master Server
   config.vm.define "master" do |node|
-
+    node.trigger.after :up do |mScripts|
+        mScripts.run_remote = {inline: "sudo /opt/bootstrap.sh -v && sudo KUBECONFIG=/etc/kubernetes/admin.conf /opt/bootstrap_master.sh -v && sudo KUBECONFIG=/etc/kubernetes/admin.conf /opt/bootstrap_metallb.sh -v"}
+    end
     node.vm.box               = VAGRANT_BOX
     node.vm.box_check_update  = false
     node.vm.box_version       = VAGRANT_BOX_VERSION
@@ -44,24 +43,28 @@ Vagrant.configure(2) do |config|
     node.vm.network "private_network", ip: "172.16.16.100"
 
     node.vm.provider :virtualbox do |v|
-      v.name    = "master"
-      v.memory  = MEMORY_MASTER_NODE
-      v.cpus    = CPUS_MASTER_NODE
+        v.name    = "master"
+        v.memory  = MEMORY_MASTER_NODE
+        v.cpus    = CPUS_MASTER_NODE
     end
 
     node.vm.provider :libvirt do |v|
-      v.memory  = MEMORY_MASTER_NODE
-      v.nested  = true
-      v.cpus    = CPUS_MASTER_NODE
+        v.memory  = MEMORY_MASTER_NODE
+        v.nested  = true
+        v.cpus    = CPUS_MASTER_NODE
     end
 
-  #  node.vm.provision "shell", path: "bootstrap_master.sh"
-
+    #  node.vm.provision "shell", path: "bootstrap_master.sh"
+    config.vm.cloud_init :user_data do |cloud_init|
+        cloud_init.content_type = "text/cloud-config"
+        cloud_init.path = "master.yaml"
+    end
+    
     # Optional MetalLB provisioning on master
     if ENABLE_METALLB
-      metallb_env = {}
-      metallb_env["METALLB_L2_INTERFACE"] = METALLB_L2_INTERFACE unless METALLB_L2_INTERFACE.to_s.empty?
-  #    node.vm.provision "shell", path: "bootstrap_metallb.sh", env: metallb_env
+        metallb_env = {}
+        metallb_env["METALLB_L2_INTERFACE"] = METALLB_L2_INTERFACE unless METALLB_L2_INTERFACE.to_s.empty?
+    #    node.vm.provision "shell", path: "bootstrap_metallb.sh", env: metallb_env
     end
     # End MetalLB provisioning block
 
@@ -73,13 +76,15 @@ Vagrant.configure(2) do |config|
     # end
     # # End OpenEBS provisioning block
 
-  end
+    end
 
   # Kubernetes Worker Nodes
   (1..WORKER_NODES_COUNT).each do |i|
-
+    config.vm.synced_folder "src/", "/srv/join"
     config.vm.define "worker#{i}" do |node|
-
+      node.trigger.after :up do |wScripts|
+        wScripts.run_remote = {inline: "sudo /opt/bootstrap.sh -v && sudo /opt/bootstrap_worker.sh -v"}
+      end
       node.vm.box               = VAGRANT_BOX
       node.vm.box_check_update  = false
       node.vm.box_version       = VAGRANT_BOX_VERSION
@@ -103,9 +108,8 @@ Vagrant.configure(2) do |config|
         cloud_initw.content_type = "text/cloud-config"
         cloud_initw.path = "worker.yaml"
       end
-
+     
     end
-
   end
 
 end
