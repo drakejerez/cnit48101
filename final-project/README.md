@@ -23,6 +23,10 @@ make k8s-load-images
 make k8s-deploy
 ```
 
+**Setup Options:**
+- **kubeadm** (recommended for production-like setup) - see [KUBEADM-SETUP.md](KUBEADM-SETUP.md)
+- **MicroK8s/k3s** (quick local setup) - see [SETUP.md](SETUP.md)
+
 ## Access
 
 ```bash
@@ -31,10 +35,12 @@ kubectl port-forward -n microservices svc/app-service 8080:8080
 kubectl port-forward -n microservices svc/auth-service 8081:8081
 
 # Jaeger UI (traces)
-minikube service -n microservices jaeger-query
+kubectl port-forward -n microservices svc/jaeger-query 16686:16686
+# Then open http://localhost:16686
 
 # Prometheus (metrics)
-minikube service -n microservices prometheus
+kubectl port-forward -n microservices svc/prometheus 9090:9090
+# Then open http://localhost:9090
 ```
 
 ## Testing
